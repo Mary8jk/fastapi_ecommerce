@@ -6,9 +6,12 @@ from sqlalchemy import (String,
                         Integer,
                         Numeric,
                         ForeignKey,
-                        Float
+                        Float,
+                        Computed,
+                        Index
                         )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from fastapi_ecommerce.database import Base
 
@@ -30,9 +33,30 @@ class Product(Base):
     rating: Mapped[float] = mapped_column(Float,
                                           default=0.0,
                                           server_default=text('0'))
+    tsv: Mapped[TSVECTOR] = mapped_column(
+        TSVECTOR,
+        Computed(
+            """
+            setweight(to_tsvector('english', coalesce(name, '')), 'A')
+            || 
+            setweight(to_tsvector('english', coalesce(description, '')), 'B')
+            """,
+            persisted=True,
+        ),
+        nullable=False,
+    )
+
     category: Mapped["Category"] = relationship("Category",
                                                 back_populates='product')
     seller: Mapped["User"] = relationship("User",
                                           back_populates='products')
     reviews: Mapped["Review"] = relationship("Review",
                                              back_populates='product')
+    cart_items: Mapped[list["CartItem"]] = relationship(
+        "CartItem",
+        back_populates="product",
+        cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_products_tsv_gin", "tsv", postgresql_using="gin"),
+    )
