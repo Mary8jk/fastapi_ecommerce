@@ -2,6 +2,7 @@ from sqlalchemy import Boolean, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from fastapi_ecommerce.database import Base
+from fastapi_ecommerce.models.orders import Order
 
 
 class User(Base):
@@ -20,3 +21,6 @@ class User(Base):
     cart_items: Mapped[list["CartItem"]] = relationship("CartItem",
                                                         back_populates="user",
                                                         cascade="all, delete-orphan")
+    orders: Mapped[list["Order"]] = relationship("Order",
+                                                 back_populates="user",
+                                                 cascade="all, delete-orphan")

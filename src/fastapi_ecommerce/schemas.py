@@ -1,6 +1,8 @@
+from fastapi.params import Form
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from decimal import Decimal
 from datetime import datetime
+from typing import Annotated
 
 class CategoryCreate(BaseModel):
     """
@@ -33,14 +35,36 @@ class ProductCreate(BaseModel):
     """
     name: str = Field(..., min_length=3, max_length=100,
                       description="Название товара (3-100 символов)")
-    description: str | None = Field(None, max_length=500,
-                                    description="Описание товара (до 500 символов)")
-    price: Decimal = Field(..., gt=0, description="Цена товара (больше 0)", decimal_places=2)
-    image_url: str | None = Field(None, max_length=200, description="URL изображения товара")
-    stock: int = Field(..., ge=0, description="Количество товара на складе (0 или больше)")
-    category_id: int = Field(..., description="ID категории, к которой относится товар")
+    description: str | None = Field(
+        None,
+        max_length=500,
+        description="Описание товара (до 500 символов)")
+    price: Decimal = Field(..., gt=0, description="Цена товара (больше 0)",
+                           decimal_places=2)
+    stock: int = Field(
+        ...,
+        ge=0,
+        description="Количество товара на складе (0 или больше)")
+    category_id: int = Field(
+        ...,
+        description="ID категории, к которой относится товар")
 
-    model_config = ConfigDict(from_attributes=True)
+    @classmethod
+    def as_form(
+            cls,
+            name: Annotated[str, Form(...)],
+            price: Annotated[Decimal, Form(...)],
+            stock: Annotated[int, Form(...)],
+            category_id: Annotated[int, Form(...)],
+            description: Annotated[str | None, Form()] = None,
+    ) -> "ProductCreate":
+        return cls(
+            name=name,
+            description=description,
+            price=price,
+            stock=stock,
+            category_id=category_id,
+        )
 
 
 class Product(BaseModel):
@@ -161,3 +185,33 @@ class Cart(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrderItem(BaseModel):
+    id: int = Field(..., description="ID позиции заказа")
+    product_id: int = Field(..., description="ID товара")
+    quantity: int = Field(..., ge=1, description="Количество")
+    unit_price: Decimal = Field(..., ge=0, description="Цена за единицу на момент покупки")
+    total_price: Decimal = Field(..., ge=0, description="Сумма по позиции")
+    product: Product | None = Field(None, description="Полная информация о товаре")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Order(BaseModel):
+    id: int = Field(..., description="ID заказа")
+    user_id: int = Field(..., description="ID пользователя")
+    status: str = Field(..., description="Текущий статус заказа")
+    total_amount: Decimal = Field(..., ge=0, description="Общая стоимость")
+    created_at: datetime = Field(..., description="Когда заказ был создан")
+    updated_at: datetime = Field(..., description="Когда последний раз обновлялся")
+    items: list[OrderItem] = Field(default_factory=list, description="Список позиций")
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrderList(BaseModel):
+    items: list[Order] = Field(..., description="Заказы на текущей странице")
+    total: int = Field(ge=0, description="Общее количество заказов")
+    page: int = Field(ge=1, description="Текущая страница")
+    page_size: int = Field(ge=1, description="Размер страницы")
+
+    model_config = ConfigDict(from_attributes=True)

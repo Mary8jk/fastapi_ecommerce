@@ -14,6 +14,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import TSVECTOR
 
 from fastapi_ecommerce.database import Base
+from fastapi_ecommerce.models.orders import OrderItem
 
 
 class Product(Base):
@@ -56,6 +57,9 @@ class Product(Base):
         "CartItem",
         back_populates="product",
         cascade="all, delete-orphan")
+    order_items: Mapped[list["OrderItem"]] = relationship(
+        "OrderItem",
+        back_populates="product")
 
     __table_args__ = (
         Index("ix_products_tsv_gin", "tsv", postgresql_using="gin"),

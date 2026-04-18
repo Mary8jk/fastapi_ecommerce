@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy import select, update, func, desc
 from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,15 @@ from fastapi_ecommerce.models.products import Product as ProductModel
 from fastapi_ecommerce.models.users import User as UserModel
 from fastapi_ecommerce.models.reviews import Review as ReviewModel
 from fastapi_ecommerce.auth import get_current_seller
+from pathlib import Path
+import uuid
+
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+MEDIA_ROOT = BASE_DIR / "media" / "products"
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
+MAX_IMAGE_SIZE = 2 * 1024 * 1024  # 2 097 152 байт
 
 # Создаём маршрутизатор для товаров
 router = APIRouter(
@@ -22,16 +31,37 @@ router = APIRouter(
 )
 
 
-# @router.get("/", status_code=status.HTTP_200_OK)
-# async def get_all_products(db: AsyncSession = Depends(get_async_db)
-#                            ) -> list[Product]:
-#     """
-#     Возвращает список всех товаров.
-#     """
-#     query = await db.scalars(
-#         select(ProductModel).where(ProductModel.is_active == True))
-#     db_products = query.all()
-#     return db_products
+async def save_product_image(file: UploadFile) -> str:
+    """
+    Сохраняет изображение товара и возвращает относительный URL.
+    """
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Only JPG, PNG or WebP images are allowed")
+
+    content = await file.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            detail="Image is too large")
+
+    extension = Path(file.filename or "").suffix.lower() or ".jpg"
+    file_name = f"{uuid.uuid4()}{extension}"
+    file_path = MEDIA_ROOT / file_name
+    file_path.write_bytes(content)
+
+    return f"/media/products/{file_name}"
+
+
+def remove_product_image(url: str | None) -> None:
+    """
+    Удаляет файл изображения, если он существует.
+    """
+    if not url:
+        return
+    relative_path = url.lstrip("/")
+    file_path = BASE_DIR / relative_path
+    if file_path.exists():
+        file_path.unlink()
 
 
 @router.get("/",
@@ -129,7 +159,8 @@ async def get_all_products(
 
 @router.post("/", response_model=Product,
              status_code=status.HTTP_201_CREATED)
-async def create_product(product: ProductCreate,
+async def create_product(product: ProductCreate = Depends(ProductCreate.as_form),
+                         image: UploadFile | None = File(None),
                          db: AsyncSession = Depends(get_async_db),
                          current_user: UserModel = Depends(get_current_seller)
                          ):
@@ -139,16 +170,18 @@ async def create_product(product: ProductCreate,
     category_result = await db.scalars(
         select(CategoryModel).where(
             CategoryModel.id == product.category_id,
-            CategoryModel.is_active == True)
+            CategoryModel.is_active.is_(True))
     )
     if not category_result.first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
                             detail="Category not found or inactive")
+    image_url = await save_product_image(image) if image else None
     db_product = ProductModel(**product.model_dump(),
-                              seller_id=current_user.id)
+                              seller_id=current_user.id,
+                              image_url=image_url)
     db.add(db_product)
     await db.commit()
-    await db.refresh(db_product)  # Для получения id и is_active из базы
+    await db.refresh(db_product)
     return db_product
 
 
@@ -163,14 +196,14 @@ async def get_products_by_category(category_id: int,
     """
     category_query = await db.scalars(select(CategoryModel).where(
         CategoryModel.id == category_id,
-        CategoryModel.is_active == True))
+        CategoryModel.is_active.is_(True)))
     category = category_query.first()
     if category is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail='Category not found or inactive')
     products_query = await db.scalars(select(ProductModel).where(
         ProductModel.category_id == category_id,
-        ProductModel.is_active == True))
+        ProductModel.is_active.is_(True)))
     products = products_query.all()
     return products
 
@@ -185,7 +218,7 @@ async def get_product(product_id: int,
     """
     query_product = await db.scalars(
         select(ProductModel).where(
-            ProductModel.is_active == True,
+            ProductModel.is_active.is_(True),
             ProductModel.id == product_id
         )
     )
@@ -194,7 +227,7 @@ async def get_product(product_id: int,
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail='Product not found or inactive')
     query_category = await db.scalars(
-        select(CategoryModel).where(CategoryModel.is_active == True,
+        select(CategoryModel).where(CategoryModel.is_active.is_(True),
                                     CategoryModel.id == product.category_id))
     category = query_category.first()
     if category is None:
@@ -208,7 +241,8 @@ async def get_product(product_id: int,
 
 @router.put("/{product_id}", response_model=Product)
 async def update_product(product_id: int,
-                         product: ProductCreate,
+                         product: ProductCreate = Depends(ProductCreate.as_form),
+                         image: UploadFile | None = File(None),
                          db: AsyncSession = Depends(get_async_db),
                          current_user: UserModel = Depends(get_current_seller)
                          ):
@@ -217,7 +251,7 @@ async def update_product(product_id: int,
     (только для 'seller').
     """
     result = await db.scalars(select(ProductModel).where(
-        ProductModel.id == product_id, ProductModel.is_active == True))
+        ProductModel.id == product_id, ProductModel.is_active.is_(True)))
     db_product = result.first()
     if not db_product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -228,7 +262,7 @@ async def update_product(product_id: int,
     category_result = await db.scalars(
         select(CategoryModel).where(
             CategoryModel.id == product.category_id,
-            CategoryModel.is_active == True)
+            CategoryModel.is_active.is_(True))
     )
     if not category_result.first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
@@ -237,8 +271,11 @@ async def update_product(product_id: int,
         update(ProductModel).where(
             ProductModel.id == product_id).values(**product.model_dump())
     )
+    if image:
+        remove_product_image(db_product.image_url)
+        db_product.image_url = await save_product_image(image)
     await db.commit()
-    await db.refresh(db_product)  # Для консистентности данных
+    await db.refresh(db_product)
     return db_product
 
 
@@ -254,7 +291,8 @@ async def delete_product(product_id: int,
     result = await db.scalars(
         select(ProductModel).where(
             ProductModel.id == product_id,
-            ProductModel.is_active == True)
+            ProductModel.is_active.is_(True)
+        )
     )
     product = result.first()
     if not product:
@@ -263,6 +301,7 @@ async def delete_product(product_id: int,
     if product.seller_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="You can only delete your own products")
+    remove_product_image(product.image_url)
     await db.execute(
         update(ProductModel).where(
             ProductModel.id == product_id).values(is_active=False)
@@ -280,7 +319,7 @@ async def get_review_for_product(product_id: int,
     product = (await db.execute(
         select(ProductModel).where(
             ProductModel.id == product_id,
-            ProductModel.is_active == True
+            ProductModel.is_active.is_(True)
         ))).scalar_one_or_none()
     if product is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
@@ -288,7 +327,7 @@ async def get_review_for_product(product_id: int,
     query_reviews = await db.scalars(
         select(ReviewModel).where(
             ReviewModel.product_id == product_id,
-            ReviewModel.is_active == True
+            ReviewModel.is_active.is_(True)
         ))
     reviews = query_reviews.all()
     return reviews
